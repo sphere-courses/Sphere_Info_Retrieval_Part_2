@@ -4,7 +4,6 @@ import os
 import pickle
 import multiprocessing
 from io import StringIO
-from multiprocessing import freeze_support
 
 from lxml import etree
 from html.parser import HTMLParser

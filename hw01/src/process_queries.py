@@ -1,10 +1,8 @@
 import re
 
-import nltk
 import pyaspeller
 from pymystem3 import Mystem
 from langdetect import detect
-from string import punctuation
 
 
 def process_query(query):
