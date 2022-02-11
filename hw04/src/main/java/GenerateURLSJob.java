@@ -1,4 +1,5 @@
 import org.apache.commons.io.FileUtils;
+import org.apache.commons.io.output.NullWriter;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.conf.Configured;
 import org.apache.hadoop.fs.FSDataInputStream;
@@ -22,31 +23,30 @@ import java.io.InputStreamReader;
 import java.net.URI;
 import java.util.HashMap;
 
-public class ExtractLinksJob extends Configured implements Tool {
+public class GenerateURLSJob extends Configured implements Tool {
     public static void main(String[] args) throws Exception{
-        // Temporary solution for fast debugging
+//         Temporary solution for fast debugging
         FileUtils.deleteDirectory(new File("output"));
 
-        int exitCode = ToolRunner.run(new ExtractLinksJob(), args);
+        int exitCode = ToolRunner.run(new GenerateURLSJob(), args);
         System.exit(exitCode);
     }
 
     private Job GetJobConf(Configuration configuration, String input, String outDir) throws IOException {
         Job job = Job.getInstance(configuration);
-        job.setJarByClass(ExtractLinksJob.class);
-        job.setJobName(ExtractLinksJob.class.getCanonicalName());
+        job.setJarByClass(GenerateURLSJob.class);
+        job.setJobName(GenerateURLSJob.class.getCanonicalName());
 
         job.setInputFormatClass(KeyValueTextInputFormat.class);
         FileInputFormat.addInputPath(job, new Path(input));
         FileOutputFormat.setOutputPath(job, new Path(outDir));
 
-        job.setMapperClass(ExtractLinksMapper.class);
-        job.setReducerClass(ExtractLinksReducer.class);
-
+        job.setMapperClass(GenerateURLSMapper.class);
+        job.setReducerClass(GenerateURLSReducer.class);
         job.setNumReduceTasks(1);
 
         job.setOutputKeyClass(Text.class);
-        job.setOutputValueClass(Text.class);
+        job.setOutputValueClass(LongWritable.class);
 
         return job;
     }
@@ -61,9 +61,9 @@ public class ExtractLinksJob extends Configured implements Tool {
         return job.waitForCompletion(true) ? 0 : 1;
     }
 
-    public static class ExtractLinksMapper extends Mapper<Text, Text, Text, Text>{
-        HashMap<String, String> idxToURI = new HashMap<>();
+    public static class GenerateURLSMapper extends Mapper<Text, Text, Text, LongWritable>{
         HashMap<String, String> URIToidx = new HashMap<>();
+        HashMap<String, String> idxToURI = new HashMap<>();
 
         @Override
         protected void setup(Context context) throws IOException {
@@ -73,55 +73,56 @@ public class ExtractLinksJob extends Configured implements Tool {
             FileSystem fs = path.getFileSystem(configuration);
             FSDataInputStream inputStream = fs.open(path);
             BufferedReader bufferedReader = new BufferedReader(new InputStreamReader(inputStream));
-            String line;
+            String line, URIHost, URIPath;
             while((line = bufferedReader.readLine()) != null){
                 String[] strings = line.split("\\t");
                 URI uri = URI.create(strings[1]);
-                idxToURI.put(strings[0], "http://" + uri.getHost() + uri.getPath());
-                URIToidx.put("http://" + uri.getHost() + uri.getPath(), strings[0]);
+                URIHost = uri.getHost().replace("\"", "");
+                URIPath = uri.getPath().replace("\"", "");
+                URIToidx.put("http://" + URIHost + path, strings[0]);
+                idxToURI.put(strings[0], "http://" + URIHost + URIPath);
             }
         }
 
         @Override
         protected void map(Text nodeId, Text HTMLEncoded, Context context) throws IOException, InterruptedException {
             LinksExtractor linksExtractor = new LinksExtractor(HTMLEncoded.toString(), idxToURI.get(nodeId.toString()));
-            String link, outId;
+            String link;
+            long idx;
             while (!linksExtractor.finished()){
                 link = linksExtractor.getNextLink();
                 if(URIToidx.containsKey(link)) {
-                    outId = URIToidx.get(link);
-                    // Ignore self links
-                    if(nodeId.toString().equals(outId)){
-                        continue;
-                    }
-                    // Emit edge: cur_node -> out_node
-                    context.write(nodeId, new Text(outId + ">"));
-                    // Emit edge: out_node <- cur_node
-                    context.write(new Text(outId), new Text(nodeId.toString() + "<"));
+                    idx = Long.valueOf(URIToidx.get(link));
                 } else {
-//                    context.write(new Text(outId), new Text(nodeId.toString() + "<"));
+                    idx = -1;
                 }
+                context.write(new Text(link), new LongWritable(idx));
             }
+            context.write(
+                    new Text(idxToURI.get(nodeId.toString())),
+                    new LongWritable(Long.valueOf(nodeId.toString()))
+            );
         }
     }
 
-    public static class ExtractLinksReducer extends Reducer<Text, Text, Text, Text>{
+    public static class GenerateURLSReducer extends Reducer<Text, LongWritable, LongWritable, Text>{
+        long idx_bias = 564549;
+
         @Override
-        protected void reduce(Text nodeId, Iterable<Text> edges, Context context) throws IOException, InterruptedException {
-            // Line format: ID\tID, ID, ... , ID, -1, ID, ... , ID
-            //                 |    outEdges    |   |   inEdges   |
-            StringBuilder inEdges = new StringBuilder(), outEdges = new StringBuilder();
-            for(Text edge : edges){
-                String edgeId = edge.toString();
-                if(edgeId.contains(">")) {
-                    outEdges.append(edgeId.substring(0, edgeId.length() - 1)).append(',');
-                } else {
-                    inEdges.append(edgeId.substring(0, edgeId.length() - 1)).append(',');
+        protected void reduce(Text url, Iterable<LongWritable> idxs, Context context) throws IOException, InterruptedException {
+            long idx = 1_000_000_000, tmp_idx;
+            for(LongWritable value : idxs){
+                tmp_idx = Long.valueOf(value.toString());
+                if(tmp_idx < idx){
+                    idx = tmp_idx;
                 }
             }
-            String edgesLine = outEdges + "-1," + inEdges;
-            edgesLine = edgesLine.substring(0, edgesLine.length() - 1);
-            context.write(nodeId, new Text(edgesLine));
+            if(idx == -1) {
+                context.write(new LongWritable(idx_bias), new Text(url));
+                idx_bias += 1;
+            } else {
+                context.write(new LongWritable(idx), new Text(url));
+            }
         }
     }
 }

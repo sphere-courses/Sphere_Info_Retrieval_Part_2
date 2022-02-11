@@ -68,7 +68,15 @@ class LinksExtractor {
             } else if(!uri.getHost().contains("lenta.ru")){
                 continue;
             }
-            link = "http://" + uri.getHost() + uri.getPath();
+            String URIHost = uri.getHost();
+            String URIPath = uri.getPath();
+            if(URIHost != null){
+                URIHost = URIHost.replace("\"", "");
+            }
+            if(URIPath != null){
+                URIPath = URIPath.replace("\"", "");
+            }
+            link = "http://" + URIHost + URIPath;
             return false;
         }
         return true;

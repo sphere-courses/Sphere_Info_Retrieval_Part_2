@@ -101,6 +101,7 @@ public class ExtractLinksJob extends Configured implements Tool {
                 } else {
 //                    context.write(new Text(outId), new Text(nodeId.toString() + "<"));
                 }
+                }
             }
         }
     }
